@@ -44,8 +44,12 @@
       .eq("id", data.user.id).single();
     if (erroPerfil) { msg.textContent = "Login ok, mas o perfil não foi encontrado."; return; }
 
-    msg.textContent = "Login feito! Olá, " + perfil.nome + " (" + perfil.perfil + ")";
-  });
+    const destinos = { funcionario: "funcionario.html" };
+if (destinos[perfil.perfil]) {
+  window.location.href = destinos[perfil.perfil];
+} else {
+  msg.textContent = "Login feito! Olá, " + perfil.nome + ". Sua tela ainda será criada.";
+}
 </script>
 </body>
 </html>
