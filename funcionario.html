@@ -25,6 +25,7 @@
   .item.feita::before{background:#16a34a}
   .item.atrasada::before{background:#dc2626}
   .item.pendente::before{background:#2563eb}
+  .item.correcao::before{background:#f59e0b}
   .hora{font-weight:700}
   .nome{margin:2px 0}
   .area{color:#6b7280;font-size:.9rem}
@@ -32,6 +33,7 @@
   .feita .selo{background:#dcfce7;color:#166534}
   .atrasada .selo{background:#fee2e2;color:#991b1b}
   .pendente .selo{background:#dbeafe;color:#1e40af}
+  .correcao .selo{background:#fef3c7;color:#92400e}
   .item button{margin-top:10px;width:100%}
   .fundo{position:fixed;inset:0;background:rgba(0,0,0,.4);display:none;
          align-items:flex-end;justify-content:center}
@@ -202,9 +204,10 @@
     const solicBox = document.getElementById("detSolic");
     const acaoBox = document.getElementById("detAcao");
 
+    const rotulo = reg.status === "em_correcao" ? "Registrado às " : "Concluída às ";
     document.getElementById("detTitulo").textContent = t.nome;
     document.getElementById("detHora").textContent =
-      "Concluída às " + horaDe(reg.criado_em) +
+      rotulo + horaDe(reg.criado_em) +
       (reg.editado_em ? " · editada às " + horaDe(reg.editado_em) : "");
     document.getElementById("detObs").textContent =
       reg.observacao ? "Observação: " + reg.observacao : "Sem observação.";
@@ -229,9 +232,9 @@
 
     const ultima = rs.data && rs.data[0] ? rs.data[0].status : null;
     const textos = {
-      pendente: "⏳ Pedido de edição enviado. Aguardando o administrador.",
-      aprovada: "✅ Pedido de edição aprovado. Você já pode editar.",
-      recusada: "❌ Pedido de edição recusado.",
+      pendente: "⏳ Pedido enviado. O registro fica em correção até o administrador decidir.",
+      aprovada: "✅ Pedido aprovado. Faça as correções para concluir o registro.",
+      recusada: "❌ Pedido recusado. O registro original foi mantido como concluído.",
       concluida: "Edição concluída."
     };
     solicBox.textContent = ultima ? textos[ultima] : "";
@@ -258,8 +261,11 @@
       const txt = el("textarea");
       txt.rows = 3;
       txt.placeholder = "Explique o que precisa ser corrigido";
+      const aviso0 = el("div", "", "Ao enviar o pedido, este registro passa a ficar \"em correção\" até a edição ser concluída.");
+      aviso0.style.margin = "8px 0";
+      aviso0.style.fontSize = ".9rem";
       const env = el("button", "primario", "Enviar pedido");
-      env.style.marginTop = "12px";
+      env.style.marginTop = "4px";
       const aviso = el("div", "", "");
       aviso.style.marginTop = "8px";
 
@@ -277,16 +283,17 @@
           env.disabled = false;
           return;
         }
-        verRegistro(t, reg);
+        fecharDet();
+        await carregar();
       });
 
-      acaoBox.append(lab, txt, env, aviso);
+      acaoBox.append(lab, txt, aviso0, env, aviso);
     });
     acaoBox.appendChild(pedir);
   }
 
   // ---------- Painel de editar (após aprovação) ----------
-  let edReg = null, edLista = [], edRemover = new Set(), edInseriu = false, edUrlsNovas = [];
+  let edReg = null, edLista = [], edRemover = new Set(), edInseriu = false;
   const edMsg = document.getElementById("edMsg");
 
   function fecharEd() {
@@ -294,8 +301,7 @@
   }
 
   function abrirEdicao(t, reg, fotos) {
-    edReg = reg; edLista = fotos; edRemover = new Set();
-    edInseriu = false; edUrlsNovas = [];
+    edReg = reg; edLista = fotos; edRemover = new Set(); edInseriu = false;
     document.getElementById("edTitulo").textContent = "Editar: " + t.nome;
     document.getElementById("edObs").value = reg.observacao || "";
     document.getElementById("edNovas").value = "";
@@ -353,7 +359,8 @@
         etapa = "remoção das fotos";
         edMsg.textContent = "Removendo fotos...";
         await tentar(() => db.from("fotos").delete().in("id", Array.from(edRemover)));
-        edRemover = new Set(); edLista = edLista.filter(f => false);
+        edLista = edLista.filter(f => !edRemover.has(f.id));
+        edRemover = new Set();
       }
 
       // 3) Salva a observação e conclui o pedido
@@ -391,7 +398,7 @@
     if (error) { document.getElementById("resumo").textContent = "Erro: " + error.message; return; }
 
     const { data: regs, error: e2 } = await db.from("registros_execucao")
-      .select("id, tarefa_id, funcionario_id, observacao, criado_em, editado_em")
+      .select("id, tarefa_id, funcionario_id, observacao, criado_em, editado_em, status")
       .gte("criado_em", inicio.toISOString())
       .order("criado_em", { ascending: true });
     if (e2) { document.getElementById("resumo").textContent = "Erro: " + e2.message; return; }
@@ -402,14 +409,21 @@
     const agoraMin = agora.getHours() * 60 + agora.getMinutes();
     const trilha = document.getElementById("trilha");
     trilha.innerHTML = "";
-    let qtdFeitas = 0;
+    let qtdFeitas = 0, qtdCorrecao = 0;
 
     tarefas.forEach(t => {
       const reg = feitas[t.id];
       const prev = minutos(t.horario_previsto);
       let estado = "pendente", texto = "Pendente";
-      if (reg) { estado = "feita"; texto = "Concluída às " + horaDe(reg.criado_em); qtdFeitas++; }
-      else if (prev !== null && prev < agoraMin) { estado = "atrasada"; texto = "Atrasada"; }
+      if (reg && reg.status === "em_correcao") {
+        estado = "correcao"; texto = "Em correção"; qtdCorrecao++;
+      } else if (reg) {
+        estado = "feita";
+        texto = "Concluída às " + horaDe(reg.criado_em) + (reg.editado_em ? " · editada" : "");
+        qtdFeitas++;
+      } else if (prev !== null && prev < agoraMin) {
+        estado = "atrasada"; texto = "Atrasada";
+      }
 
       const item = el("div", "item " + estado);
       item.appendChild(el("div", "hora", hhmm(t.horario_previsto)));
@@ -431,7 +445,8 @@
 
     document.getElementById("resumo").textContent = tarefas.length === 0
       ? "Nenhuma tarefa programada para hoje."
-      : qtdFeitas + " de " + tarefas.length + " tarefas concluídas hoje";
+      : qtdFeitas + " de " + tarefas.length + " tarefas concluídas hoje" +
+        (qtdCorrecao ? " · " + qtdCorrecao + " em correção" : "");
   }
 
   async function iniciar() {
