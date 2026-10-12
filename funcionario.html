@@ -40,9 +40,10 @@
          padding:20px;max-height:90vh;overflow:auto}
   label{display:block;font-weight:600;margin:12px 0 6px}
   textarea,input{width:100%;padding:12px;font-size:1rem;border:1px solid #ccc;border-radius:8px}
-  #msg{margin-top:12px;font-size:.95rem}
+  #msg,#edMsg{margin-top:12px;font-size:.95rem}
   .fotos{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin:12px 0}
   .fotos img{width:100%;border-radius:8px;display:block}
+  .fcard button{width:100%;margin-top:6px}
   #detSolic{margin:12px 0;font-weight:600}
 </style>
 </head>
@@ -87,6 +88,26 @@
     <div id="detSolic"></div>
     <div id="detAcao"></div>
     <button class="sec" id="fecharDet" style="width:100%;margin-top:12px">Fechar</button>
+  </div>
+</div>
+
+<!-- Painel: editar registro (após aprovação) -->
+<div class="fundo" id="fundoEd">
+  <div class="folha">
+    <h2 id="edTitulo" style="margin:0 0 8px"></h2>
+
+    <label for="edObs">Observação</label>
+    <textarea id="edObs" rows="3"></textarea>
+
+    <label>Fotos atuais</label>
+    <div class="fotos" id="edFotos"></div>
+
+    <label for="edNovas">Acrescentar fotos</label>
+    <input id="edNovas" type="file" accept="image/*" multiple>
+
+    <button class="primario" id="edSalvar" style="margin-top:16px">Salvar edição</button>
+    <button class="sec" id="edCancelar" style="width:100%;margin-top:8px">Cancelar</button>
+    <div id="edMsg"></div>
   </div>
 </div>
 
@@ -149,6 +170,15 @@
     throw ultimo;
   }
 
+  // Envia uma foto e devolve o endereço público dela
+  async function enviarFoto(arquivo, pasta) {
+    const blob = await comprimir(arquivo);
+    const caminho = pasta + "/" + crypto.randomUUID() + ".jpg";
+    await tentar(() => db.storage.from("evidencias")
+      .upload(caminho, blob, { contentType: "image/jpeg" }));
+    return db.storage.from("evidencias").getPublicUrl(caminho).data.publicUrl;
+  }
+
   // ---------- Painel de registrar ----------
   function abrir(t) {
     tarefaAtual = t.id;
@@ -173,7 +203,9 @@
     const acaoBox = document.getElementById("detAcao");
 
     document.getElementById("detTitulo").textContent = t.nome;
-    document.getElementById("detHora").textContent = "Concluída às " + horaDe(reg.criado_em);
+    document.getElementById("detHora").textContent =
+      "Concluída às " + horaDe(reg.criado_em) +
+      (reg.editado_em ? " · editada às " + horaDe(reg.editado_em) : "");
     document.getElementById("detObs").textContent =
       reg.observacao ? "Observação: " + reg.observacao : "Sem observação.";
     fotosBox.innerHTML = "";
@@ -181,7 +213,7 @@
     acaoBox.innerHTML = "";
     document.getElementById("fundoDet").classList.add("aberta");
 
-    const rf = await db.from("fotos").select("url").eq("registro_id", reg.id);
+    const rf = await db.from("fotos").select("id, url").eq("registro_id", reg.id);
     const rs = await db.from("solicitacoes_edicao").select("status")
       .eq("registro_id", reg.id).order("criado_em", { ascending: false }).limit(1);
 
@@ -198,14 +230,24 @@
     const ultima = rs.data && rs.data[0] ? rs.data[0].status : null;
     const textos = {
       pendente: "⏳ Pedido de edição enviado. Aguardando o administrador.",
-      aprovada: "✅ Pedido de edição aprovado pelo administrador.",
+      aprovada: "✅ Pedido de edição aprovado. Você já pode editar.",
       recusada: "❌ Pedido de edição recusado.",
       concluida: "Edição concluída."
     };
     solicBox.textContent = ultima ? textos[ultima] : "";
 
-    const podePedir = reg.funcionario_id === usuario.id &&
-                      (!ultima || ultima === "recusada" || ultima === "concluida");
+    const autor = reg.funcionario_id === usuario.id;
+
+    // Pedido aprovado: libera o botão de editar
+    if (autor && ultima === "aprovada") {
+      const ed = el("button", "primario", "Editar registro");
+      ed.addEventListener("click", () => abrirEdicao(t, reg, rf.data || []));
+      acaoBox.appendChild(ed);
+      return;
+    }
+
+    // Sem pedido em aberto: permite solicitar edição
+    const podePedir = autor && (!ultima || ultima === "recusada" || ultima === "concluida");
     if (!podePedir) return;
 
     const pedir = el("button", "sec", "Solicitar edição ao administrador");
@@ -243,6 +285,96 @@
     acaoBox.appendChild(pedir);
   }
 
+  // ---------- Painel de editar (após aprovação) ----------
+  let edReg = null, edLista = [], edRemover = new Set(), edInseriu = false, edUrlsNovas = [];
+  const edMsg = document.getElementById("edMsg");
+
+  function fecharEd() {
+    document.getElementById("fundoEd").classList.remove("aberta");
+  }
+
+  function abrirEdicao(t, reg, fotos) {
+    edReg = reg; edLista = fotos; edRemover = new Set();
+    edInseriu = false; edUrlsNovas = [];
+    document.getElementById("edTitulo").textContent = "Editar: " + t.nome;
+    document.getElementById("edObs").value = reg.observacao || "";
+    document.getElementById("edNovas").value = "";
+    edMsg.textContent = "";
+
+    const box = document.getElementById("edFotos");
+    box.innerHTML = "";
+    fotos.forEach(f => {
+      const card = el("div", "fcard");
+      const img = document.createElement("img");
+      img.src = f.url; img.alt = "Foto atual";
+      const b = el("button", "sec", "Remover");
+      b.addEventListener("click", () => {
+        if (edRemover.has(f.id)) {
+          edRemover.delete(f.id); b.textContent = "Remover"; img.style.opacity = 1;
+        } else {
+          edRemover.add(f.id); b.textContent = "Desfazer"; img.style.opacity = 0.3;
+        }
+      });
+      card.append(img, b);
+      box.appendChild(card);
+    });
+    document.getElementById("fundoEd").classList.add("aberta");
+  }
+
+  document.getElementById("edSalvar").addEventListener("click", async () => {
+    const novos = document.getElementById("edNovas").files;
+    const restantes = edLista.filter(f => !edRemover.has(f.id)).length;
+    if (restantes + novos.length === 0) {
+      edMsg.textContent = "O registro precisa ficar com pelo menos uma foto.";
+      return;
+    }
+    const salvar = document.getElementById("edSalvar");
+    salvar.disabled = true;
+    let etapa = "";
+    try {
+      // 1) Envia as fotos novas (só uma vez, mesmo se tentar de novo)
+      if (!edInseriu) {
+        const urls = [];
+        for (let i = 0; i < novos.length; i++) {
+          etapa = "foto nova " + (i + 1) + " de " + novos.length;
+          edMsg.textContent = "Enviando " + etapa + "...";
+          urls.push(await enviarFoto(novos[i], edReg.id));
+        }
+        if (urls.length) {
+          etapa = "ligação das fotos";
+          await tentar(() => db.from("fotos")
+            .insert(urls.map(u => ({ registro_id: edReg.id, url: u }))));
+        }
+        edInseriu = true;
+      }
+
+      // 2) Remove as fotos marcadas
+      if (edRemover.size) {
+        etapa = "remoção das fotos";
+        edMsg.textContent = "Removendo fotos...";
+        await tentar(() => db.from("fotos").delete().in("id", Array.from(edRemover)));
+        edRemover = new Set(); edLista = edLista.filter(f => false);
+      }
+
+      // 3) Salva a observação e conclui o pedido
+      etapa = "salvar observação";
+      edMsg.textContent = "Salvando...";
+      await tentar(() => db.rpc("concluir_edicao", {
+        p_registro: edReg.id,
+        p_obs: document.getElementById("edObs").value.trim() || null
+      }));
+
+      fecharEd();
+      fecharDet();
+      await carregar();
+    } catch (e) {
+      edMsg.textContent = "Erro na etapa (" + etapa + "): " + e.message +
+        ". Toque em Salvar para tentar de novo.";
+    }
+    salvar.disabled = false;
+  });
+  document.getElementById("edCancelar").addEventListener("click", fecharEd);
+
   // ---------- Trilha do dia ----------
   async function carregar() {
     const agora = new Date();
@@ -259,7 +391,7 @@
     if (error) { document.getElementById("resumo").textContent = "Erro: " + error.message; return; }
 
     const { data: regs, error: e2 } = await db.from("registros_execucao")
-      .select("id, tarefa_id, funcionario_id, observacao, criado_em")
+      .select("id, tarefa_id, funcionario_id, observacao, criado_em, editado_em")
       .gte("criado_em", inicio.toISOString())
       .order("criado_em", { ascending: true });
     if (e2) { document.getElementById("resumo").textContent = "Erro: " + e2.message; return; }
@@ -329,11 +461,7 @@
       for (let i = 0; i < arquivos.length; i++) {
         etapa = "foto " + (i + 1) + " de " + arquivos.length;
         msg.textContent = "Enviando " + etapa + "...";
-        const blob = await comprimir(arquivos[i]);
-        const caminho = registroId + "/" + crypto.randomUUID() + ".jpg";
-        await tentar(() => db.storage.from("evidencias")
-          .upload(caminho, blob, { contentType: "image/jpeg" }));
-        urls.push(db.storage.from("evidencias").getPublicUrl(caminho).data.publicUrl);
+        urls.push(await enviarFoto(arquivos[i], registroId));
       }
 
       etapa = "registro";
