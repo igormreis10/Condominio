@@ -32,7 +32,7 @@
   .feita .selo{background:#dcfce7;color:#166534}
   .atrasada .selo{background:#fee2e2;color:#991b1b}
   .pendente .selo{background:#dbeafe;color:#1e40af}
-  .item button{margin-top:10px}
+  .item button{margin-top:10px;width:100%}
   .fundo{position:fixed;inset:0;background:rgba(0,0,0,.4);display:none;
          align-items:flex-end;justify-content:center}
   .fundo.aberta{display:flex}
@@ -41,6 +41,9 @@
   label{display:block;font-weight:600;margin:12px 0 6px}
   textarea,input{width:100%;padding:12px;font-size:1rem;border:1px solid #ccc;border-radius:8px}
   #msg{margin-top:12px;font-size:.95rem}
+  .fotos{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin:12px 0}
+  .fotos img{width:100%;border-radius:8px;display:block}
+  #detSolic{margin:12px 0;font-weight:600}
 </style>
 </head>
 <body>
@@ -57,6 +60,7 @@
   <div class="trilha" id="trilha"></div>
 </div>
 
+<!-- Painel: registrar execução -->
 <div class="fundo" id="fundo">
   <div class="folha">
     <h2 id="folhaTitulo" style="margin:0 0 8px"></h2>
@@ -70,6 +74,19 @@
     <button class="primario" id="enviar" style="margin-top:16px">Enviar registro</button>
     <button class="sec" id="cancelar" style="width:100%;margin-top:8px">Cancelar</button>
     <div id="msg"></div>
+  </div>
+</div>
+
+<!-- Painel: ver registro -->
+<div class="fundo" id="fundoDet">
+  <div class="folha">
+    <h2 id="detTitulo" style="margin:0 0 4px"></h2>
+    <div class="area" id="detHora"></div>
+    <div id="detObs" style="margin-top:12px"></div>
+    <div class="fotos" id="detFotos"></div>
+    <div id="detSolic"></div>
+    <div id="detAcao"></div>
+    <button class="sec" id="fecharDet" style="width:100%;margin-top:12px">Fechar</button>
   </div>
 </div>
 
@@ -118,6 +135,21 @@
     });
   }
 
+  // Tenta a operação até 3 vezes (ajuda quando a rede oscila)
+  async function tentar(fn) {
+    let ultimo;
+    for (let i = 1; i <= 3; i++) {
+      try {
+        const r = await fn();
+        if (!r.error) return r;
+        ultimo = r.error;
+      } catch (e) { ultimo = e; }
+      await new Promise(ok => setTimeout(ok, 1500));
+    }
+    throw ultimo;
+  }
+
+  // ---------- Painel de registrar ----------
   function abrir(t) {
     tarefaAtual = t.id;
     document.getElementById("folhaTitulo").textContent = t.nome;
@@ -130,6 +162,88 @@
     document.getElementById("fundo").classList.remove("aberta");
   }
 
+  // ---------- Painel de ver registro ----------
+  function fecharDet() {
+    document.getElementById("fundoDet").classList.remove("aberta");
+  }
+
+  async function verRegistro(t, reg) {
+    const fotosBox = document.getElementById("detFotos");
+    const solicBox = document.getElementById("detSolic");
+    const acaoBox = document.getElementById("detAcao");
+
+    document.getElementById("detTitulo").textContent = t.nome;
+    document.getElementById("detHora").textContent = "Concluída às " + horaDe(reg.criado_em);
+    document.getElementById("detObs").textContent =
+      reg.observacao ? "Observação: " + reg.observacao : "Sem observação.";
+    fotosBox.innerHTML = "";
+    solicBox.textContent = "Carregando...";
+    acaoBox.innerHTML = "";
+    document.getElementById("fundoDet").classList.add("aberta");
+
+    const rf = await db.from("fotos").select("url").eq("registro_id", reg.id);
+    const rs = await db.from("solicitacoes_edicao").select("status")
+      .eq("registro_id", reg.id).order("criado_em", { ascending: false }).limit(1);
+
+    if (rf.error) {
+      fotosBox.textContent = "Erro ao carregar fotos: " + rf.error.message;
+    } else {
+      rf.data.forEach(f => {
+        const i = document.createElement("img");
+        i.src = f.url; i.loading = "lazy"; i.alt = "Evidência";
+        fotosBox.appendChild(i);
+      });
+    }
+
+    const ultima = rs.data && rs.data[0] ? rs.data[0].status : null;
+    const textos = {
+      pendente: "⏳ Pedido de edição enviado. Aguardando o administrador.",
+      aprovada: "✅ Pedido de edição aprovado pelo administrador.",
+      recusada: "❌ Pedido de edição recusado.",
+      concluida: "Edição concluída."
+    };
+    solicBox.textContent = ultima ? textos[ultima] : "";
+
+    const podePedir = reg.funcionario_id === usuario.id &&
+                      (!ultima || ultima === "recusada" || ultima === "concluida");
+    if (!podePedir) return;
+
+    const pedir = el("button", "sec", "Solicitar edição ao administrador");
+    pedir.style.width = "100%";
+    pedir.addEventListener("click", () => {
+      acaoBox.innerHTML = "";
+      const lab = el("label", "", "Motivo do pedido");
+      const txt = el("textarea");
+      txt.rows = 3;
+      txt.placeholder = "Explique o que precisa ser corrigido";
+      const env = el("button", "primario", "Enviar pedido");
+      env.style.marginTop = "12px";
+      const aviso = el("div", "", "");
+      aviso.style.marginTop = "8px";
+
+      env.addEventListener("click", async () => {
+        const motivo = txt.value.trim();
+        if (motivo.length < 5) { aviso.textContent = "Descreva o motivo (mínimo 5 letras)."; return; }
+        env.disabled = true;
+        aviso.textContent = "Enviando...";
+        const { error } = await db.from("solicitacoes_edicao")
+          .insert({ registro_id: reg.id, solicitante_id: usuario.id, motivo: motivo });
+        if (error) {
+          aviso.textContent = error.code === "23505"
+            ? "Já existe um pedido pendente para este registro."
+            : "Erro: " + error.message;
+          env.disabled = false;
+          return;
+        }
+        verRegistro(t, reg);
+      });
+
+      acaoBox.append(lab, txt, env, aviso);
+    });
+    acaoBox.appendChild(pedir);
+  }
+
+  // ---------- Trilha do dia ----------
   async function carregar() {
     const agora = new Date();
     const inicio = new Date();
@@ -145,7 +259,7 @@
     if (error) { document.getElementById("resumo").textContent = "Erro: " + error.message; return; }
 
     const { data: regs, error: e2 } = await db.from("registros_execucao")
-      .select("tarefa_id, criado_em")
+      .select("id, tarefa_id, funcionario_id, observacao, criado_em")
       .gte("criado_em", inicio.toISOString())
       .order("criado_em", { ascending: true });
     if (e2) { document.getElementById("resumo").textContent = "Erro: " + e2.message; return; }
@@ -170,7 +284,12 @@
       item.appendChild(el("div", "nome", t.nome));
       item.appendChild(el("div", "area", t.area));
       item.appendChild(el("span", "selo", texto));
-      if (!reg) {
+
+      if (reg) {
+        const v = el("button", "sec", "Ver registro");
+        v.addEventListener("click", () => verRegistro(t, reg));
+        item.appendChild(v);
+      } else {
         const b = el("button", "primario", "Registrar execução");
         b.addEventListener("click", () => abrir(t));
         item.appendChild(b);
@@ -197,20 +316,7 @@
     await carregar();
   }
 
-  // Tenta a operação até 3 vezes (ajuda quando a rede oscila)
-  async function tentar(fn) {
-    let ultimo;
-    for (let i = 1; i <= 3; i++) {
-      try {
-        const r = await fn();
-        if (!r.error) return r;
-        ultimo = r.error;
-      } catch (e) { ultimo = e; }
-      await new Promise(ok => setTimeout(ok, 1500));
-    }
-    throw ultimo;
-  }
-
+  // ---------- Enviar registro (fotos primeiro, registro depois) ----------
   btn.addEventListener("click", async () => {
     const arquivos = document.getElementById("fotos").files;
     if (arquivos.length === 0) { msg.textContent = "Selecione pelo menos uma foto."; return; }
@@ -220,7 +326,6 @@
     const urls = [];
     let etapa = "";
     try {
-      // 1) Primeiro envia as fotos
       for (let i = 0; i < arquivos.length; i++) {
         etapa = "foto " + (i + 1) + " de " + arquivos.length;
         msg.textContent = "Enviando " + etapa + "...";
@@ -231,7 +336,6 @@
         urls.push(db.storage.from("evidencias").getPublicUrl(caminho).data.publicUrl);
       }
 
-      // 2) Só depois cria o registro
       etapa = "registro";
       msg.textContent = "Salvando registro...";
       await tentar(() => db.from("registros_execucao").insert({
@@ -241,7 +345,6 @@
         observacao: document.getElementById("obs").value.trim() || null
       }));
 
-      // 3) Liga as fotos ao registro
       etapa = "ligação das fotos";
       await tentar(() => db.from("fotos")
         .insert(urls.map(u => ({ registro_id: registroId, url: u }))));
@@ -256,6 +359,7 @@
   });
 
   document.getElementById("cancelar").addEventListener("click", fechar);
+  document.getElementById("fecharDet").addEventListener("click", fecharDet);
   document.getElementById("sair").addEventListener("click", async () => {
     await db.auth.signOut();
     location.href = "index.html";
