@@ -3,49 +3,101 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Condomínio - Funcionário</title>
+<title>Condomínio - Minhas tarefas</title>
 <style>
+  *{box-sizing:border-box}
   body{font-family:system-ui,sans-serif;background:#f3f4f6;margin:0;padding:16px}
-  .card{background:#fff;padding:20px;border-radius:12px;max-width:420px;
-        margin:0 auto;box-shadow:0 2px 8px rgba(0,0,0,.1)}
-  .topo{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
+  .wrap{max-width:480px;margin:0 auto}
+  .topo{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
   h1{font-size:1.2rem;margin:0}
+  .sub{color:#6b7280;font-size:.9rem;text-transform:capitalize}
+  button{font-size:1rem;border-radius:8px;border:0;padding:12px;cursor:pointer}
+  .primario{background:#2563eb;color:#fff;width:100%}
+  .primario:disabled{background:#9ca3af}
+  .sec{background:#e5e7eb;color:#111;padding:8px 12px}
+  #resumo{background:#fff;border-radius:12px;padding:12px 16px;margin-bottom:16px;
+          font-weight:600;box-shadow:0 1px 4px rgba(0,0,0,.08)}
+  .trilha{position:relative;margin-left:12px;border-left:3px solid #d1d5db;padding-left:20px}
+  .item{position:relative;background:#fff;border-radius:12px;padding:14px;
+        margin-bottom:14px;box-shadow:0 1px 4px rgba(0,0,0,.08)}
+  .item::before{content:"";position:absolute;left:-30px;top:18px;width:16px;height:16px;
+        border-radius:50%;background:#9ca3af;border:3px solid #f3f4f6}
+  .item.feita::before{background:#16a34a}
+  .item.atrasada::before{background:#dc2626}
+  .item.pendente::before{background:#2563eb}
+  .hora{font-weight:700}
+  .nome{margin:2px 0}
+  .area{color:#6b7280;font-size:.9rem}
+  .selo{display:inline-block;font-size:.8rem;padding:2px 8px;border-radius:999px;margin-top:6px}
+  .feita .selo{background:#dcfce7;color:#166534}
+  .atrasada .selo{background:#fee2e2;color:#991b1b}
+  .pendente .selo{background:#dbeafe;color:#1e40af}
+  .item button{margin-top:10px}
+  .fundo{position:fixed;inset:0;background:rgba(0,0,0,.4);display:none;
+         align-items:flex-end;justify-content:center}
+  .fundo.aberta{display:flex}
+  .folha{background:#fff;width:100%;max-width:480px;border-radius:16px 16px 0 0;
+         padding:20px;max-height:90vh;overflow:auto}
   label{display:block;font-weight:600;margin:12px 0 6px}
-  select,textarea,input,button{width:100%;padding:12px;font-size:1rem;
-        border-radius:8px;box-sizing:border-box;border:1px solid #ccc}
-  button{background:#2563eb;color:#fff;border:0;margin-top:16px}
-  button:disabled{background:#9ca3af}
-  #sair{width:auto;background:#e5e7eb;color:#111;margin:0;padding:8px 12px}
+  textarea,input{width:100%;padding:12px;font-size:1rem;border:1px solid #ccc;border-radius:8px}
   #msg{margin-top:12px;font-size:.95rem}
 </style>
 </head>
 <body>
-<div class="card">
+<div class="wrap">
   <div class="topo">
-    <h1>Olá, <span id="nome"></span></h1>
-    <button id="sair">Sair</button>
+    <div>
+      <h1>Olá, <span id="nome"></span></h1>
+      <div class="sub" id="data"></div>
+    </div>
+    <button class="sec" id="sair">Sair</button>
   </div>
 
-  <label for="tarefa">Tarefa executada</label>
-  <select id="tarefa"><option value="">Escolha...</option></select>
+  <div id="resumo">Carregando...</div>
+  <div class="trilha" id="trilha"></div>
+</div>
 
-  <label for="obs">Observação (opcional)</label>
-  <textarea id="obs" rows="3"></textarea>
+<div class="fundo" id="fundo">
+  <div class="folha">
+    <h2 id="folhaTitulo" style="margin:0 0 8px"></h2>
 
-  <label for="fotos">Fotos (evidências)</label>
-  <input id="fotos" type="file" accept="image/*" multiple>
+    <label for="obs">Observação (opcional)</label>
+    <textarea id="obs" rows="3"></textarea>
 
-  <button id="enviar">Enviar registro</button>
-  <div id="msg"></div>
+    <label for="fotos">Fotos (evidências)</label>
+    <input id="fotos" type="file" accept="image/*" multiple>
+
+    <button class="primario" id="enviar" style="margin-top:16px">Enviar registro</button>
+    <button class="sec" id="cancelar" style="width:100%;margin-top:8px">Cancelar</button>
+    <div id="msg"></div>
+  </div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="config.js"></script>
 <script>
+  const DIAS = ["domingo","segunda-feira","terça-feira","quarta-feira",
+                "quinta-feira","sexta-feira","sábado"];
   const msg = document.getElementById("msg");
-  const sel = document.getElementById("tarefa");
   const btn = document.getElementById("enviar");
   let usuario = null;
+  let tarefaAtual = null;
+
+  function el(tag, classe, texto) {
+    const e = document.createElement(tag);
+    if (classe) e.className = classe;
+    if (texto !== undefined) e.textContent = texto;
+    return e;
+  }
+  function minutos(t) {
+    if (!t) return null;
+    const p = t.split(":");
+    return Number(p[0]) * 60 + Number(p[1]);
+  }
+  function hhmm(t) { return t ? t.slice(0, 5) : "--:--"; }
+  function horaDe(iso) {
+    return new Date(iso).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+  }
 
   // Reduz a foto para caber no limite de 5 MB
   function comprimir(file) {
@@ -66,6 +118,71 @@
     });
   }
 
+  function abrir(t) {
+    tarefaAtual = t.id;
+    document.getElementById("folhaTitulo").textContent = t.nome;
+    document.getElementById("obs").value = "";
+    document.getElementById("fotos").value = "";
+    msg.textContent = "";
+    document.getElementById("fundo").classList.add("aberta");
+  }
+  function fechar() {
+    document.getElementById("fundo").classList.remove("aberta");
+  }
+
+  async function carregar() {
+    const agora = new Date();
+    const inicio = new Date();
+    inicio.setHours(0, 0, 0, 0);
+    document.getElementById("data").textContent =
+      DIAS[agora.getDay()] + ", " + agora.toLocaleDateString("pt-BR");
+
+    const { data: tarefas, error } = await db.from("tarefas")
+      .select("id, nome, area, horario_previsto")
+      .eq("ativa", true)
+      .contains("dias_semana", [agora.getDay()])
+      .order("horario_previsto", { ascending: true });
+    if (error) { document.getElementById("resumo").textContent = "Erro: " + error.message; return; }
+
+    const { data: regs, error: e2 } = await db.from("registros_execucao")
+      .select("tarefa_id, criado_em")
+      .gte("criado_em", inicio.toISOString())
+      .order("criado_em", { ascending: true });
+    if (e2) { document.getElementById("resumo").textContent = "Erro: " + e2.message; return; }
+
+    const feitas = {};
+    regs.forEach(r => { if (!feitas[r.tarefa_id]) feitas[r.tarefa_id] = r; });
+
+    const agoraMin = agora.getHours() * 60 + agora.getMinutes();
+    const trilha = document.getElementById("trilha");
+    trilha.innerHTML = "";
+    let qtdFeitas = 0;
+
+    tarefas.forEach(t => {
+      const reg = feitas[t.id];
+      const prev = minutos(t.horario_previsto);
+      let estado = "pendente", texto = "Pendente";
+      if (reg) { estado = "feita"; texto = "Concluída às " + horaDe(reg.criado_em); qtdFeitas++; }
+      else if (prev !== null && prev < agoraMin) { estado = "atrasada"; texto = "Atrasada"; }
+
+      const item = el("div", "item " + estado);
+      item.appendChild(el("div", "hora", hhmm(t.horario_previsto)));
+      item.appendChild(el("div", "nome", t.nome));
+      item.appendChild(el("div", "area", t.area));
+      item.appendChild(el("span", "selo", texto));
+      if (!reg) {
+        const b = el("button", "primario", "Registrar execução");
+        b.addEventListener("click", () => abrir(t));
+        item.appendChild(b);
+      }
+      trilha.appendChild(item);
+    });
+
+    document.getElementById("resumo").textContent = tarefas.length === 0
+      ? "Nenhuma tarefa programada para hoje."
+      : qtdFeitas + " de " + tarefas.length + " tarefas concluídas hoje";
+  }
+
   async function iniciar() {
     const { data: { session } } = await db.auth.getSession();
     if (!session) { location.href = "index.html"; return; }
@@ -77,19 +194,11 @@
     }
     usuario = { id: session.user.id };
     document.getElementById("nome").textContent = perfil.nome;
-
-    const { data: tarefas, error } = await db.from("tarefas")
-      .select("id, nome").eq("ativa", true).order("nome");
-    if (error) { msg.textContent = "Erro ao carregar tarefas: " + error.message; return; }
-    tarefas.forEach(t => {
-      const o = document.createElement("option");
-      o.value = t.id; o.textContent = t.nome; sel.appendChild(o);
-    });
+    await carregar();
   }
 
   btn.addEventListener("click", async () => {
     const arquivos = document.getElementById("fotos").files;
-    if (!sel.value) { msg.textContent = "Escolha a tarefa."; return; }
     if (arquivos.length === 0) { msg.textContent = "Selecione pelo menos uma foto."; return; }
 
     btn.disabled = true;
@@ -97,7 +206,7 @@
     try {
       const { data: reg, error: e1 } = await db.from("registros_execucao")
         .insert({
-          tarefa_id: sel.value,
+          tarefa_id: tarefaAtual,
           funcionario_id: usuario.id,
           observacao: document.getElementById("obs").value.trim() || null
         }).select().single();
@@ -114,15 +223,15 @@
           .insert({ registro_id: reg.id, url: url });
         if (e3) throw e3;
       }
-      msg.textContent = "Registro enviado com sucesso!";
-      sel.value = ""; document.getElementById("obs").value = "";
-      document.getElementById("fotos").value = "";
+      fechar();
+      await carregar();
     } catch (e) {
       msg.textContent = "Erro ao enviar: " + e.message;
     }
     btn.disabled = false;
   });
 
+  document.getElementById("cancelar").addEventListener("click", fechar);
   document.getElementById("sair").addEventListener("click", async () => {
     await db.auth.signOut();
     location.href = "index.html";
