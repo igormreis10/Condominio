@@ -197,7 +197,7 @@
     await carregar();
   }
 
-  btn.addEventListener("click", async () => {
+document.getElementById("cancelar").addEventListener("click", fechar);
     const arquivos = document.getElementById("fotos").files;
     if (arquivos.length === 0) { msg.textContent = "Selecione pelo menos uma foto."; return; }
 
