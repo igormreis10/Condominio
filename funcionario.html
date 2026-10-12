@@ -197,36 +197,60 @@
     await carregar();
   }
 
-document.getElementById("cancelar").addEventListener("click", fechar);
+  // Tenta a operação até 3 vezes (ajuda quando a rede oscila)
+  async function tentar(fn) {
+    let ultimo;
+    for (let i = 1; i <= 3; i++) {
+      try {
+        const r = await fn();
+        if (!r.error) return r;
+        ultimo = r.error;
+      } catch (e) { ultimo = e; }
+      await new Promise(ok => setTimeout(ok, 1500));
+    }
+    throw ultimo;
+  }
+
+  btn.addEventListener("click", async () => {
     const arquivos = document.getElementById("fotos").files;
     if (arquivos.length === 0) { msg.textContent = "Selecione pelo menos uma foto."; return; }
 
     btn.disabled = true;
-    msg.textContent = "Enviando...";
+    const registroId = crypto.randomUUID();
+    const urls = [];
+    let etapa = "";
     try {
-      const { data: reg, error: e1 } = await db.from("registros_execucao")
-        .insert({
-          tarefa_id: tarefaAtual,
-          funcionario_id: usuario.id,
-          observacao: document.getElementById("obs").value.trim() || null
-        }).select().single();
-      if (e1) throw e1;
-
-      for (const arq of arquivos) {
-        const blob = await comprimir(arq);
-        const caminho = reg.id + "/" + crypto.randomUUID() + ".jpg";
-        const { error: e2 } = await db.storage.from("evidencias")
-          .upload(caminho, blob, { contentType: "image/jpeg" });
-        if (e2) throw e2;
-        const url = db.storage.from("evidencias").getPublicUrl(caminho).data.publicUrl;
-        const { error: e3 } = await db.from("fotos")
-          .insert({ registro_id: reg.id, url: url });
-        if (e3) throw e3;
+      // 1) Primeiro envia as fotos
+      for (let i = 0; i < arquivos.length; i++) {
+        etapa = "foto " + (i + 1) + " de " + arquivos.length;
+        msg.textContent = "Enviando " + etapa + "...";
+        const blob = await comprimir(arquivos[i]);
+        const caminho = registroId + "/" + crypto.randomUUID() + ".jpg";
+        await tentar(() => db.storage.from("evidencias")
+          .upload(caminho, blob, { contentType: "image/jpeg" }));
+        urls.push(db.storage.from("evidencias").getPublicUrl(caminho).data.publicUrl);
       }
+
+      // 2) Só depois cria o registro
+      etapa = "registro";
+      msg.textContent = "Salvando registro...";
+      await tentar(() => db.from("registros_execucao").insert({
+        id: registroId,
+        tarefa_id: tarefaAtual,
+        funcionario_id: usuario.id,
+        observacao: document.getElementById("obs").value.trim() || null
+      }));
+
+      // 3) Liga as fotos ao registro
+      etapa = "ligação das fotos";
+      await tentar(() => db.from("fotos")
+        .insert(urls.map(u => ({ registro_id: registroId, url: u }))));
+
       fechar();
       await carregar();
     } catch (e) {
-      msg.textContent = "Erro ao enviar: " + e.message;
+      msg.textContent = "Erro na etapa (" + etapa + "): " + e.message +
+        ". Toque em Enviar para tentar de novo.";
     }
     btn.disabled = false;
   });
