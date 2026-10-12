@@ -33,23 +33,28 @@
 
   document.getElementById("entrar").addEventListener("click", async () => {
     msg.textContent = "Entrando...";
-    const { data, error } = await db.auth.signInWithPassword({
-      email: document.getElementById("email").value.trim(),
-      password: document.getElementById("senha").value
-    });
-    if (error) { msg.textContent = "E-mail ou senha incorretos."; return; }
+    try {
+      const { data, error } = await db.auth.signInWithPassword({
+        email: document.getElementById("email").value.trim(),
+        password: document.getElementById("senha").value
+      });
+      if (error) { msg.textContent = "Erro no login: " + error.message; return; }
 
-    const { data: perfil, error: erroPerfil } = await db
-      .from("usuarios").select("nome, perfil")
-      .eq("id", data.user.id).single();
-    if (erroPerfil) { msg.textContent = "Login ok, mas o perfil não foi encontrado."; return; }
+      const { data: perfil, error: erroPerfil } = await db
+        .from("usuarios").select("nome, perfil")
+        .eq("id", data.user.id).single();
+      if (erroPerfil) { msg.textContent = "Login ok, erro no perfil: " + erroPerfil.message; return; }
 
-    const destinos = { funcionario: "funcionario.html" };
-if (destinos[perfil.perfil]) {
-  window.location.href = destinos[perfil.perfil];
-} else {
-  msg.textContent = "Login feito! Olá, " + perfil.nome + ". Sua tela ainda será criada.";
-}
+      const destinos = { funcionario: "funcionario.html" };
+      if (destinos[perfil.perfil]) {
+        window.location.href = destinos[perfil.perfil];
+      } else {
+        msg.textContent = "Login feito! Olá, " + perfil.nome + ". Sua tela ainda será criada.";
+      }
+    } catch (e) {
+      msg.textContent = "Erro inesperado: " + e.message + " (confira o config.js)";
+    }
+  });
 </script>
 </body>
 </html>
